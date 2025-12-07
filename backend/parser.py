@@ -152,18 +152,15 @@ async def extract_production_items(df: pd.DataFrame, filename: str) -> List[Prod
     
     client = OpenAI(api_key=api_key)
     
-    # Convert DataFrame to CSV string for LLM (more compact than markdown)
     table_data = df.to_csv(index=False)
     logger.debug(f"Table data size: {len(table_data)} characters")
     
-    # Define response schema as nested Pydantic model
     class ProductionBatch(BaseModel):
         items: List[ProductionItemInput]
     
     try:
-        # Use latest parse() method with Pydantic model directly
         completion = client.beta.chat.completions.parse(
-            model="gpt-4o-2024-08-06",  # Latest model supporting structured outputs
+            model="gpt-5",
             messages=[
                 {
                     "role": "system",

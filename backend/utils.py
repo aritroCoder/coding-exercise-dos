@@ -21,21 +21,17 @@ def parse_date(date_input: any) -> Optional[datetime]:
     if date_input is None or (isinstance(date_input, str) and date_input.strip() == ""):
         return None
     
-    # If already datetime
     if isinstance(date_input, datetime):
         return date_input
     
-    # Handle pandas Timestamp
     try:
         if hasattr(date_input, 'to_pydatetime'):
             return date_input.to_pydatetime()
     except Exception:
         pass
     
-    # Try parsing string
     if isinstance(date_input, str):
         try:
-            # Use dateutil parser which handles many formats
             parsed = date_parser.parse(date_input, dayfirst=True)
             return parsed
         except Exception as e:

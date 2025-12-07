@@ -1,14 +1,24 @@
 import logging
 import os
+import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
-from database import create_indexes
+from database import (
+    create_indexes,
+    delete_item,
+    get_item_by_id,
+    get_items,
+    get_status_counts,
+    get_total_count,
+    insert_items,
+)
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
+from parser import parse_production_sheet
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -78,8 +88,9 @@ async def health_check():
             mongo_status = "connected"
         else:
             mongo_status = "disconnected"
-    except:
+    except Exception as e:
         mongo_status = "error"
+        logger.debug(f"MongoDB health check error: {e}")
 
     return {
         "status": "healthy",
@@ -90,25 +101,88 @@ async def health_check():
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
     """
-    Upload and parse production planning sheet
+    Upload and parse production planning sheet.
+    Accepts Excel files (.xlsx, .xls) and extracts production items using AI.
     """
+    if not file.filename:
+        raise HTTPException(
+            status_code=400,
+            detail="No filename provided"
+        )
+    
     if not file.filename.endswith(('.xlsx', '.xls')):
         raise HTTPException(
             status_code=400,
             detail="Invalid file type. Please upload an Excel file (.xlsx or .xls)"
         )
-
-    # TODO: Implement file parsing logic
-    # For now, return a placeholder response
-    return JSONResponse(
-        status_code=200,
-        content={
-            "message": "File received successfully",
-            "filename": file.filename,
-            "size": file.size,
-            "status": "pending_processing"
-        }
-    )
+    
+    if not db:
+        raise HTTPException(
+            status_code=503,
+            detail="Database connection not available"
+        )
+    
+    temp_file_path = None
+    
+    try:
+        logger.info(f"Processing upload: {file.filename}")
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_file:
+            contents = await file.read()
+            temp_file.write(contents)
+            temp_file_path = temp_file.name
+        
+        logger.info(f"Saved temporary file: {temp_file_path}")
+        
+        items = await parse_production_sheet(temp_file_path, file.filename)
+        
+        if not items:
+            logger.warning(f"No items extracted from {file.filename}")
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "message": "File processed but no items found",
+                    "filename": file.filename,
+                    "items_extracted": 0,
+                    "items_stored": 0
+                }
+            )
+        
+        logger.info(f"Extracted {len(items)} items from {file.filename}")
+        
+        inserted_count = await insert_items(db, items)
+        
+        logger.info(f"Stored {inserted_count} items from {file.filename}")
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "message": "File processed successfully",
+                "filename": file.filename,
+                "items_extracted": len(items),
+                "items_stored": inserted_count
+            }
+        )
+        
+    except ValueError as e:
+        logger.error(f"Validation error processing {file.filename}: {e}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Failed to parse file: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Error processing {file.filename}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal error processing file: {str(e)}"
+        )
+    finally:
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+                logger.debug(f"Cleaned up temporary file: {temp_file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temporary file {temp_file_path}: {e}")
 
 @app.get("/api/production-items")
 async def get_production_items(
@@ -118,84 +192,134 @@ async def get_production_items(
     status: Optional[str] = None
 ):
     """
-    Get production line items with optional filtering
+    Get production line items with optional filtering and pagination.
+    
+    Query Parameters:
+    - skip: Number of items to skip (default: 0)
+    - limit: Maximum items to return (default: 100, max: 1000)
+    - style: Filter by style (case-insensitive partial match)
+    - status: Filter by status (exact match)
     """
-    # TODO: Implement database query logic
-    # For now, return sample data
-    sample_items = [
-        {
-            "id": "1",
-            "order_number": "PO-001",
-            "style": "STYLE-ABC",
-            "fabric": "100% Cotton",
-            "color": "Navy Blue",
-            "quantity": 1000,
-            "status": "in_production",
-            "dates": {
-                "fabric": "2024-01-15",
-                "cutting": "2024-01-20",
-                "sewing": "2024-01-25",
-                "shipping": "2024-02-01"
-            }
-        },
-        {
-            "id": "2",
-            "order_number": "PO-002",
-            "style": "STYLE-XYZ",
-            "fabric": "Polyester Blend",
-            "color": "Red",
-            "quantity": 500,
-            "status": "pending",
-            "dates": {
-                "fabric": "2024-01-18",
-                "cutting": "2024-01-23",
-                "sewing": "2024-01-28",
-                "shipping": "2024-02-05"
-            }
+    if not db:
+        raise HTTPException(
+            status_code=503,
+            detail="Database connection not available"
+        )
+    
+    if limit > 1000:
+        limit = 1000
+    
+    if skip < 0:
+        skip = 0
+    
+    try:
+        items = await get_items(
+            db,
+            skip=skip,
+            limit=limit,
+            style=style,
+            status=status
+        )
+        
+        total_count = await get_total_count(
+            db,
+            style=style,
+            status=status
+        )
+        
+        status_counts = await get_status_counts(db)
+        
+        logger.debug(f"Retrieved {len(items)} items (total: {total_count})")
+        
+        return {
+            "items": items,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit,
+            "status_counts": status_counts
         }
-    ]
-
-    return {
-        "items": sample_items,
-        "total": len(sample_items),
-        "skip": skip,
-        "limit": limit
-    }
+        
+    except Exception as e:
+        logger.error(f"Error retrieving production items: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve items: {str(e)}"
+        )
 
 @app.get("/api/production-items/{item_id}")
 async def get_production_item(item_id: str):
     """
-    Get a specific production item by ID
+    Get a specific production item by its MongoDB ObjectId.
+    
+    Path Parameters:
+    - item_id: MongoDB ObjectId as string
     """
-    # TODO: Implement database query logic
-    return {
-        "id": item_id,
-        "order_number": "PO-001",
-        "style": "STYLE-ABC",
-        "fabric": "100% Cotton",
-        "color": "Navy Blue",
-        "quantity": 1000,
-        "status": "in_production",
-        "dates": {
-            "fabric": "2024-01-15",
-            "cutting": "2024-01-20",
-            "sewing": "2024-01-25",
-            "shipping": "2024-02-01"
-        },
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat()
-    }
+    if not db:
+        raise HTTPException(
+            status_code=503,
+            detail="Database connection not available"
+        )
+    
+    try:
+        item = await get_item_by_id(db, item_id)
+        
+        if not item:
+            logger.info(f"Item not found: {item_id}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Production item with id '{item_id}' not found"
+            )
+        
+        logger.debug(f"Retrieved item: {item_id}")
+        return item
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving item {item_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve item: {str(e)}"
+        )
 
 @app.delete("/api/production-items/{item_id}")
 async def delete_production_item(item_id: str):
     """
-    Delete a production item
+    Delete a production item by its MongoDB ObjectId.
+    
+    Path Parameters:
+    - item_id: MongoDB ObjectId as string
     """
-    # TODO: Implement database deletion logic
-    return {
-        "message": f"Item {item_id} deleted successfully",
-        "id": item_id
-    }
+    if not db:
+        raise HTTPException(
+            status_code=503,
+            detail="Database connection not available"
+        )
+    
+    try:
+        deleted = await delete_item(db, item_id)
+        
+        if not deleted:
+            logger.info(f"Item not found for deletion: {item_id}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Production item with id '{item_id}' not found"
+            )
+        
+        logger.info(f"Deleted item: {item_id}")
+        return {
+            "message": "Item deleted successfully",
+            "id": item_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting item {item_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete item: {str(e)}"
+        )
 
 if __name__ == "__main__":
     import uvicorn
