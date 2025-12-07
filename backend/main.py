@@ -1,12 +1,14 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+import logging
+import os
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from database import create_indexes
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
-from typing import List, Dict, Any, Optional
-from datetime import datetime
-import os
-import logging
-from contextlib import asynccontextmanager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,6 +28,9 @@ async def lifespan(app: FastAPI):
         db = client.production
         await client.server_info()  # Test connection
         logger.info("Connected to MongoDB successfully")
+        
+        await create_indexes(db)
+        logger.info("Database indexes created/verified")
     except Exception as e:
         logger.error(f"Failed to connect to MongoDB: {e}")
 
@@ -87,7 +92,6 @@ async def upload_file(file: UploadFile = File(...)):
     """
     Upload and parse production planning sheet
     """
-    # Validate file type
     if not file.filename.endswith(('.xlsx', '.xls')):
         raise HTTPException(
             status_code=400,

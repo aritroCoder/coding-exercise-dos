@@ -33,18 +33,15 @@ async def test_parser():
     logger.info("="*60)
     
     try:
-        # Test 1: Read Excel
         logger.info("\n[1/2] Testing Excel reading...")
         df = read_excel_flexible(test_file)
         logger.info(f"✓ Successfully read Excel: {df.shape[0]} rows, {df.shape[1]} columns")
         logger.info(f"Columns: {list(df.columns)[:10]}")  # Show first 10 columns
         
-        # Test 2: Full pipeline with LLM
         logger.info("\n[2/2] Testing LLM extraction...")
         items = await parse_production_sheet(test_file, "tna-uno.xlsx")
         logger.info(f"✓ Successfully extracted {len(items)} production items")
         
-        # Display sample results
         logger.info("\n" + "="*60)
         logger.info("Sample Results (first 3 items):")
         logger.info("="*60)
