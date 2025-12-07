@@ -116,7 +116,7 @@ async def upload_file(file: UploadFile = File(...)):
             detail="Invalid file type. Please upload an Excel file (.xlsx or .xls)"
         )
     
-    if not db:
+    if db is None:
         raise HTTPException(
             status_code=503,
             detail="Database connection not available"
@@ -200,7 +200,7 @@ async def get_production_items(
     - style: Filter by style (case-insensitive partial match)
     - status: Filter by status (exact match)
     """
-    if not db:
+    if db is None:
         raise HTTPException(
             status_code=503,
             detail="Database connection not available"
@@ -254,7 +254,7 @@ async def get_production_item(item_id: str):
     Path Parameters:
     - item_id: MongoDB ObjectId as string
     """
-    if not db:
+    if db is None:
         raise HTTPException(
             status_code=503,
             detail="Database connection not available"
@@ -290,7 +290,7 @@ async def delete_production_item(item_id: str):
     Path Parameters:
     - item_id: MongoDB ObjectId as string
     """
-    if not db:
+    if db is None:
         raise HTTPException(
             status_code=503,
             detail="Database connection not available"

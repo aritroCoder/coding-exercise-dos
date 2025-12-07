@@ -10,8 +10,7 @@ from openai import OpenAI
 from pydantic import BaseModel
 from utils import format_date_iso, parse_date
 
-# Load environment variables
-load_dotenv()
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
 logger = logging.getLogger(__name__)
 
